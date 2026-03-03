@@ -1,25 +1,41 @@
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Int32MultiArray
+from std_msgs.msg import Int32MultiArray, Float32MultiArray
 import numpy as np
-import matplotlib.pyplot as plt
+from scipy.interpolate import splprep, splev
 import heapq
 
-class AStarVisualizer(Node):
+class AStar(Node):
     def __init__(self):
-        super().__init__('a_star_visualizer')
+        super().__init__('a_star_node')
         self.subscription = self.create_subscription(Int32MultiArray, 'raw_map', self.map_callback, 10)
-        
-        plt.ion()
-        self.fig, self.ax = plt.subplots()
+        self.path_pub = self.create_publisher(Float32MultiArray, 'a_path', 10)
 
     def get_manhattan_distance(self, p1, p2):
-        # 启发式函数 h(n): 曼哈顿距离
         return abs(p1[0] - p2[0]) + abs(p1[1] - p2[1])
+
+    # 新增剪枝，去掉多余节点 
+    def prune_path(self, grid, path):
+        if len(path) <= 2: return path
+        pruned = [path[0]]
+        curr = 0
+        while curr < len(path) - 1:
+            for i in range(len(path) - 1, curr, -1):
+                if self.is_clear(grid, path[curr], path[i]):
+                    pruned.append(path[i])
+                    curr = i
+                    break
+        return pruned
+
+    def is_clear(self, grid, p1, p2):
+        points = np.linspace(p1, p2, 20)
+        for pt in points:
+            r, c = int(round(pt[0])), int(round(pt[1]))
+            if grid[r][c] == 1: return False
+        return True
 
     def a_star_algorithm(self, grid, start, end):
         rows, cols = grid.shape
-        # 优先队列存放: (f_score, (x, y))
         open_list = []
         heapq.heappush(open_list, (0, start))
         came_from = {}
@@ -27,7 +43,6 @@ class AStarVisualizer(Node):
         
         while open_list:
             current_f, current = heapq.heappop(open_list)
-
             if current == end:
                 path = []
                 while current in came_from:
@@ -38,49 +53,48 @@ class AStarVisualizer(Node):
 
             for dx, dy in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
                 neighbor = (current[0] + dx, current[1] + dy)
-
                 if 0 <= neighbor[0] < rows and 0 <= neighbor[1] < cols:
-                    if grid[neighbor[0]][neighbor[1]] == 1:
-                        continue
-                    
-                    tentative_g_score = g_score[current] + 1
-                    
-                    if neighbor not in g_score or tentative_g_score < g_score[neighbor]:
+                    if grid[neighbor[0]][neighbor[1]] == 1: continue
+                    cost = 1.414 if abs(dx) + abs(dy) == 2 else 1.0
+                    tentative_g = g_score[current] + cost
+                    if neighbor not in g_score or tentative_g < g_score[neighbor]:
                         came_from[neighbor] = current
-                        g_score[neighbor] = tentative_g_score
-                        f_score = tentative_g_score + self.get_manhattan_distance(neighbor, end)
-                        heapq.heappush(open_list, (f_score, neighbor))
-        
-        return None # 没找到路径
+                        g_score[neighbor] = tentative_g
+                        f = tentative_g + self.get_manhattan_distance(neighbor, end)
+                        heapq.heappush(open_list, (f, neighbor))
+        return None
 
     def map_callback(self, msg):
-        size = 10
-        grid = np.array(msg.data).reshape((size, size))
-        start = (0, 0)
-        end = (size - 1, size - 1)
-
-        self.get_logger().info('收到新地图，计算寻路中...')
-        path = self.a_star_algorithm(grid, start, end)
-
-        self.ax.clear()
-        self.ax.imshow(grid, cmap='Greys', origin='upper')
+        grid = np.array(msg.data).reshape((10, 10))
+        path = self.a_star_algorithm(grid, (0, 0), (9, 9))
         
         if path:
-            self.get_logger().info('找到路径！')
-            path_x = [p[1] for p in path]
-            path_y = [p[0] for p in path]
-            self.ax.plot(path_x, path_y, color='red', linewidth=2, label='Path')
-        else:
-            self.get_logger().warn('没有找到可行路径')
+            #pruned_path = self.prune_path(grid, path)
+            pruned_path = path
+            try:
+                x = [p[1] for p in pruned_path]
+                y = [p[0] for p in pruned_path]
+                tck, u = splprep([x, y], s=0.5, k=min(5, len(pruned_path)-1))
+                u_new = np.linspace(0, 1, 50)
+                new_points = splev(u_new, tck)
+                
+                msg = Float32MultiArray()
+                combined = []
+                for xi, yi in zip(new_points[0], new_points[1]):
+                    combined.extend([float(xi), float(yi)])
+                msg.data = combined
+                self.path_pub.publish(msg)
+            except:
+                msg = Float32MultiArray()
+                combined = []
+                for p in path:
+                    combined.append(float(p[1]))
+                    combined.append(float(p[0]))
+                msg.data = combined
+                self.path_pub.publish(msg)
 
-        self.ax.plot(start[1], start[0], 'go', label='Start')
-        self.ax.plot(end[1], end[0], 'bo', label='End')   
-        self.ax.legend()
-        
-        plt.draw()
-        plt.pause(0.01)
-
-def main():
-    rclpy.init()
-    rclpy.spin(AStarVisualizer())
+def main(args=None):
+    rclpy.init(args=args)
+    node = AStar()
+    rclpy.spin(node)
     rclpy.shutdown()

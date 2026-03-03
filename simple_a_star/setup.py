@@ -1,3 +1,5 @@
+import os
+from glob import glob
 from setuptools import find_packages, setup
 
 package_name = 'simple_a_star'
@@ -10,6 +12,7 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        (os.path.join('share', package_name, 'launch'), glob('launch/*_launch.py')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -22,6 +25,9 @@ setup(
         'console_scripts': [
        		'map_pub = simple_a_star.map_pub:main',
         	'a_star = simple_a_star.a_star:main',
+        	'pid_controller = simple_a_star.pid_controller:main',
+            	'robot_sim = simple_a_star.robot_sim:main',
+            	'visualizer = simple_a_star.visualizer:main',
         ],
     },
 )
